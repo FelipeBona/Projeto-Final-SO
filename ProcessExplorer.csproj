@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <AssemblyName>ProcessExplorer</AssemblyName>
+    <Product>Simple Process Explorer</Product>
+    <Version>1.0.0</Version>
+    <Authors>Estudante de Ciência da Computação</Authors>
+    <Description>Réplica simples do Process Explorer - Trabalho de Sistemas Operacionais</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>
