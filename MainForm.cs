@@ -5,6 +5,8 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.IO;
+using System.Diagnostics;
+using System.Text.Json;
 using ProcessExplorer.Core;
 using ProcessExplorer.Models;
 using ProcessExplorer.Forms;
@@ -41,6 +43,17 @@ namespace ProcessExplorer
         private RichTextBox _summaryBox;
         private int _sortColumn = -1;
         private bool _sortAscending = true;
+        private ToolStripComboBox _filterModeCombo;
+        private bool _isPaused = false;
+        private ToolStripButton _pauseButton;
+        private ToolStripMenuItem _themeLightItem;
+        private ToolStripMenuItem _themeDarkItem;
+        private ToolStripStatusLabel _statusIntervalLabel;
+        private ToolStripStatusLabel _statusLastUpdateLabel;
+        private string _settingsFilePath;
+        private ToolStripProgressBar _cpuProgressBar;
+        private ToolStripProgressBar _memProgressBar;
+        private Label _headerUsageLabel;
 
         public MainForm()
         {
@@ -53,6 +66,8 @@ namespace ProcessExplorer
             this.KeyDown += MainForm_KeyDown;
             this.Shown += (s, e) => AdjustHeaderHeight();
             this.Resize += (s, e) => AdjustHeaderHeight();
+            _settingsFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ProcessExplorerSettings.txt");
+            LoadSettings();
 
             // Carregar processos de forma assíncrona após a janela ser exibida
             this.Load += async (s, e) => await LoadProcessesAsync();
@@ -79,7 +94,12 @@ namespace ProcessExplorer
             _statusProcessesLabel = new ToolStripStatusLabel("Processos: 0") { Spring = false };
             _statusCpuLabel = new ToolStripStatusLabel("CPU: 0%") { Spring = false };
             _statusMemLabel = new ToolStripStatusLabel("Memória: 0 MB") { Spring = false };
-            _statusStrip.Items.AddRange(new ToolStripItem[] { _statusProcessesLabel, new ToolStripSeparator(), _statusCpuLabel, new ToolStripSeparator(), _statusMemLabel });
+            _statusIntervalLabel = new ToolStripStatusLabel("Intervalo: 2000ms");
+            _statusLastUpdateLabel = new ToolStripStatusLabel("Última atualização: -");
+            _statusStrip.Items.AddRange(new ToolStripItem[] { _statusProcessesLabel, new ToolStripSeparator(), _statusCpuLabel, new ToolStripSeparator(), _statusMemLabel, new ToolStripSeparator(), _statusIntervalLabel, new ToolStripSeparator(), _statusLastUpdateLabel });
+            _cpuProgressBar = new ToolStripProgressBar { Width = 90, Maximum = 100 };            
+            _memProgressBar = new ToolStripProgressBar { Width = 90, Maximum = 100 };
+            _statusStrip.Items.AddRange(new ToolStripItem[] { _statusProcessesLabel, new ToolStripSeparator(), _statusCpuLabel, _cpuProgressBar, new ToolStripSeparator(), _statusMemLabel, _memProgressBar, new ToolStripSeparator(), _statusIntervalLabel, new ToolStripSeparator(), _statusLastUpdateLabel });
             
             // Menu superior (deve ter Dock.Top)
             _menuStrip = new MenuStrip
@@ -90,6 +110,7 @@ namespace ProcessExplorer
             var fileMenu = new ToolStripMenuItem("Arquivo");
             fileMenu.DropDownItems.Add("Atualizar", null, (s, e) => LoadProcesses());
             fileMenu.DropDownItems.Add("Exportar Lista...", null, (s, e) => ExportProcesses());
+            fileMenu.DropDownItems.Add("Exportar JSON...", null, (s, e) => ExportProcessesJson());
             fileMenu.DropDownItems.Add(new ToolStripSeparator());
             fileMenu.DropDownItems.Add("Sair", null, (s, e) => Application.Exit());
 
@@ -101,6 +122,12 @@ namespace ProcessExplorer
             viewMenu.DropDownItems.Add("Atualizar a cada 5 segundos", null, (s, e) => SetRefreshRate(5000));
             viewMenu.DropDownItems.Add(new ToolStripSeparator());
             viewMenu.DropDownItems.Add("Filtrar por Nome...", null, (s, e) => _searchBox.Focus());
+            viewMenu.DropDownItems.Add(new ToolStripSeparator());
+            var temaMenu = new ToolStripMenuItem("Tema");
+            _themeLightItem = new ToolStripMenuItem("Claro", null, (s, e) => { ApplyTheme(false); SaveSettings(); });
+            _themeDarkItem = new ToolStripMenuItem("Escuro", null, (s, e) => { ApplyTheme(true); SaveSettings(); });
+            temaMenu.DropDownItems.AddRange(new[] { _themeLightItem, _themeDarkItem });
+            viewMenu.DropDownItems.Add(temaMenu);
 
             var helpMenu = new ToolStripMenuItem("Ajuda");
             helpMenu.DropDownItems.Add("Atalhos de Teclado", null, (s, e) => ShowShortcuts());
@@ -159,6 +186,20 @@ namespace ProcessExplorer
             };
             _toolStrip.Items.Add(_searchLabel);
             _toolStrip.Items.Add(_searchBox);
+            _filterModeCombo = new ToolStripComboBox
+            {
+                AutoSize = false,
+                Width = 80,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            _filterModeCombo.Items.AddRange(new[] { "Nome", "PID" });
+            _filterModeCombo.SelectedIndex = 0;
+            _filterModeCombo.SelectedIndexChanged += (s, e) => UpdateProcessListView();
+            _toolStrip.Items.Add(new ToolStripLabel("Modo:"));
+            _toolStrip.Items.Add(_filterModeCombo);
+            _pauseButton = new ToolStripButton("Pausar", null, (s, e) => TogglePause()) { CheckOnClick = true };
+            _toolStrip.Items.Add(new ToolStripSeparator());
+            _toolStrip.Items.Add(_pauseButton);
             
 
             // Container principal com splitter
@@ -190,6 +231,7 @@ namespace ProcessExplorer
             _processListView.Columns.Add("Handles", 80, HorizontalAlignment.Center);
             _processListView.Columns.Add("Usuário", 120, HorizontalAlignment.Left);
             _processListView.Columns.Add("Tempo de Execução", 130, HorizontalAlignment.Left);
+            _processListView.Columns.Add("Caminho", 280, HorizontalAlignment.Left);
 
             _processListView.SelectedIndexChanged += ProcessListView_SelectedIndexChanged;
             _processListView.DoubleClick += ProcessListView_DoubleClick;
@@ -200,6 +242,15 @@ namespace ProcessExplorer
             // Context menu para o ListView
             var contextMenu = new ContextMenuStrip();
             contextMenu.Items.Add("Finalizar Processo", null, (s, e) => KillSelectedProcess());
+            var prioridadeMenu = new ToolStripMenuItem("Alterar Prioridade");
+            prioridadeMenu.DropDownItems.Add("Alta", null, (s, e) => ChangePriority(ProcessPriorityClass.High));
+            prioridadeMenu.DropDownItems.Add("Normal", null, (s, e) => ChangePriority(ProcessPriorityClass.Normal));
+            prioridadeMenu.DropDownItems.Add("Baixa", null, (s, e) => ChangePriority(ProcessPriorityClass.BelowNormal));
+            contextMenu.Items.Add(prioridadeMenu);
+            contextMenu.Items.Add("Abrir Local do Arquivo", null, (s, e) => OpenFileLocation());
+            contextMenu.Items.Add("Copiar Nome", null, (s, e) => CopySelectedField(1));
+            contextMenu.Items.Add("Copiar PID", null, (s, e) => CopySelectedField(0));
+            contextMenu.Items.Add("Copiar Linha Completa", null, (s, e) => CopySelectedRow());
             contextMenu.Items.Add("Ver Detalhes", null, (s, e) => ShowProcessDetails());
             contextMenu.Items.Add(new ToolStripSeparator());
             contextMenu.Items.Add("Atualizar", null, (s, e) => LoadProcesses());
@@ -211,7 +262,7 @@ namespace ProcessExplorer
             _headerPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 180,
+                Height = 240, // altura inicial maior para evitar corte inicial
                 Padding = new Padding(10),
                 BackColor = Color.FromArgb(234, 238, 242)
             };
@@ -249,6 +300,16 @@ namespace ProcessExplorer
             };
             _headerPanel.Controls.Add(_summaryBox);
             _headerPanel.Controls.Add(_titleLabel);
+            _headerUsageLabel = new Label
+            {
+                Dock = DockStyle.Bottom,
+                Height = 22,
+                Font = new Font("Segoe UI", 9F, FontStyle.Italic),
+                TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = Color.FromArgb(50, 70, 90),
+                Text = "Memória usada: -"
+            };
+            _headerPanel.Controls.Add(_headerUsageLabel);
             splitContainer.Panel1.Controls.Add(_headerPanel);
 
             // Painel de detalhes (inicialmente escondido)
@@ -325,6 +386,15 @@ namespace ProcessExplorer
                 _statusProcessesLabel.Text = $"Processos: {stats.ProcessCount} | Threads: {stats.ThreadCount} | Handles: {stats.HandleCount}";
                 _statusCpuLabel.Text = $"CPU: {stats.TotalCpuUsage:F1}%";
                 _statusMemLabel.Text = $"Memória: {stats.TotalMemoryUsedMB}";
+                _statusLastUpdateLabel.Text = $"Última atualização: {DateTime.Now:HH:mm:ss}";
+                _cpuProgressBar.Value = (int)Math.Min(100, stats.TotalCpuUsage);
+                _memProgressBar.Value = (int)Math.Min(100, stats.MemoryUsagePercent);
+                var totalPhysMB = stats.TotalPhysicalMemory > 0 ? (stats.TotalPhysicalMemory / 1024.0 / 1024.0) : 0;
+                var availableMB = stats.TotalMemoryAvailable / 1024.0 / 1024.0;
+                var usedMB = totalPhysMB > 0 ? (totalPhysMB - availableMB) : (stats.TotalMemoryUsed / 1024.0 / 1024.0);
+                _headerUsageLabel.Text = totalPhysMB > 0
+                    ? $"Memória usada: {usedMB:F0} MB de {totalPhysMB:F0} MB (Livre: {availableMB:F0} MB)"
+                    : $"Memória usada (aprox soma processos): {usedMB:F0} MB | Livre: {availableMB:F0} MB";
             }
             catch (Exception ex)
             {
@@ -426,6 +496,7 @@ namespace ProcessExplorer
         private void SetRefreshRate(int milliseconds)
         {
             _refreshTimer.Interval = milliseconds;
+            _statusIntervalLabel.Text = $"Intervalo: {milliseconds}ms";
         }
 
         private void ShowPerformanceGraphs()
@@ -501,10 +572,10 @@ namespace ProcessExplorer
                 try
                 {
                     using var sw = new StreamWriter(sfd.FileName);
-                    sw.WriteLine("PID;Nome;CPU%;Memória;Threads;Handles;Usuário;TempoExecução");
+                    sw.WriteLine("PID;Nome;CPU%;Memória;Threads;Handles;Usuário;TempoExecução;Caminho");
                     foreach (var p in _currentProcesses)
                     {
-                        sw.WriteLine($"{p.ProcessId};{p.ProcessName};{p.CpuUsage:F2};{p.WorkingSetMB};{p.ThreadCount};{p.HandleCount};{p.UserName};{p.RunningTime}");
+                        sw.WriteLine($"{p.ProcessId};{p.ProcessName};{p.CpuUsage:F2};{p.WorkingSetMB};{p.ThreadCount};{p.HandleCount};{p.UserName};{p.RunningTime};{p.FilePath}");
                     }
                     MessageBox.Show("Exportação concluída.", "Exportar", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
@@ -515,14 +586,67 @@ namespace ProcessExplorer
             }
         }
 
+        private void ExportProcessesJson()
+        {
+            if (_currentProcesses == null || _currentProcesses.Count == 0)
+            {
+                MessageBox.Show("Não há dados para exportar.", "Exportar", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            using var sfd = new SaveFileDialog
+            {
+                Filter = "JSON (*.json)|*.json",
+                FileName = "processos.json",
+                Title = "Exportar Lista de Processos (JSON)"
+            };
+            if (sfd.ShowDialog() == DialogResult.OK)
+            {
+                try
+                {
+                    var exportObj = _currentProcesses.Select(p => new
+                    {
+                        p.ProcessId,
+                        p.ProcessName,
+                        p.CpuUsage,
+                        WorkingSetMB = p.WorkingSetMB,
+                        p.ThreadCount,
+                        p.HandleCount,
+                        p.UserName,
+                        p.RunningTime,
+                        p.FilePath
+                    });
+                    var json = JsonSerializer.Serialize(exportObj, new JsonSerializerOptions { WriteIndented = true });
+                    File.WriteAllText(sfd.FileName, json);
+                    MessageBox.Show("Exportação JSON concluída.", "Exportar", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Falha ao exportar JSON: {ex.Message}", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
         private void UpdateProcessListView()
         {
             if (_currentProcesses == null) return;
             var tag = _searchBox.Tag as string;
             string filter = (tag == "placeholder") ? string.Empty : (_searchBox?.Text?.Trim() ?? string.Empty);
-            var filtered = string.IsNullOrEmpty(filter)
-                ? _currentProcesses
-                : _currentProcesses.Where(p => p.ProcessName.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+            IEnumerable<ProcessInfo> filteredEnum = _currentProcesses;
+            if (!string.IsNullOrEmpty(filter))
+            {
+                if (_filterModeCombo != null && _filterModeCombo.SelectedItem?.ToString() == "PID")
+                {
+                    if (int.TryParse(filter, out int pid))
+                        filteredEnum = filteredEnum.Where(p => p.ProcessId == pid);
+                    else
+                        filteredEnum = Enumerable.Empty<ProcessInfo>();
+                }
+                else
+                {
+                    filteredEnum = filteredEnum.Where(p => p.ProcessName.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0);
+                }
+            }
+            var filtered = filteredEnum.ToList();
 
             _processListView.BeginUpdate();
             _processListView.Items.Clear();
@@ -536,6 +660,7 @@ namespace ProcessExplorer
                 item.SubItems.Add(proc.HandleCount.ToString());
                 item.SubItems.Add(proc.UserName);
                 item.SubItems.Add(proc.RunningTime);
+                item.SubItems.Add(proc.FilePath);
                 item.Tag = proc;
                 if (proc.CpuUsage > 50)
                     item.BackColor = Color.FromArgb(255, 204, 204);
@@ -544,6 +669,7 @@ namespace ProcessExplorer
                 _processListView.Items.Add(item);
             }
             _processListView.EndUpdate();
+            UpdateSortHeaderIndicators();
         }
 
         private void ProcessListView_ColumnClick(object sender, ColumnClickEventArgs e)
@@ -561,7 +687,6 @@ namespace ProcessExplorer
             var items = _processListView.Items.Cast<ListViewItem>().ToList();
             Func<ListViewItem, object> keySelector = item => item.SubItems[e.Column].Text;
 
-            // Tratamento especial para colunas numéricas
             if (e.Column == 0 || e.Column == 2 || e.Column == 3 || e.Column == 4 || e.Column == 5)
             {
                 keySelector = item =>
@@ -580,6 +705,7 @@ namespace ProcessExplorer
             _processListView.Items.Clear();
             foreach (var it in items) _processListView.Items.Add(it);
             _processListView.EndUpdate();
+            UpdateSortHeaderIndicators();
         }
 
         private void EnableDoubleBuffering(ListView listView)
@@ -589,18 +715,181 @@ namespace ProcessExplorer
                 .SetValue(listView, true, null);
         }
 
+        private void UpdateSortHeaderIndicators()
+        {
+            if (_sortColumn < 0) return;
+            for (int i = 0; i < _processListView.Columns.Count; i++)
+            {
+                var col = _processListView.Columns[i];
+                string baseText = col.Text.Split(' ')[0];
+                if (i == _sortColumn)
+                {
+                    col.Text = baseText + (_sortAscending ? " ▲" : " ▼");
+                }
+                else
+                {
+                    col.Text = baseText;
+                }
+            }
+        }
+
+        private void TogglePause()
+        {
+            _isPaused = !_isPaused;
+            if (_isPaused)
+            {
+                _refreshTimer.Stop();
+                _pauseButton.Text = "Retomar";
+                _statusLastUpdateLabel.Text = "Atualização pausada";
+            }
+            else
+            {
+                _refreshTimer.Start();
+                _pauseButton.Text = "Pausar";
+            }
+        }
+
+        private void ChangePriority(ProcessPriorityClass priority)
+        {
+            if (_selectedProcessId == -1) return;
+            try
+            {
+                var proc = Process.GetProcessById(_selectedProcessId);
+                proc.PriorityClass = priority;
+                MessageBox.Show($"Prioridade alterada para {priority}.", "Prioridade", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Falha ao alterar prioridade: {ex.Message}", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void OpenFileLocation()
+        {
+            if (_selectedProcessId == -1) return;
+            try
+            {
+                var proc = Process.GetProcessById(_selectedProcessId);
+                string path;
+                try { path = proc.MainModule?.FileName ?? string.Empty; }
+                catch { path = string.Empty; }
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                {
+                    MessageBox.Show("Caminho indisponível.", "Abrir Local", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                Process.Start("explorer.exe", $"/select,\"{path}\"");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Falha ao abrir local: {ex.Message}", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void CopySelectedField(int subIndex)
+        {
+            if (_processListView.SelectedItems.Count == 0) return;
+            var item = _processListView.SelectedItems[0];
+            if (subIndex < item.SubItems.Count)
+                Clipboard.SetText(item.SubItems[subIndex].Text);
+        }
+
+        private void CopySelectedRow()
+        {
+            if (_processListView.SelectedItems.Count == 0) return;
+            var item = _processListView.SelectedItems[0];
+            var parts = item.SubItems.Cast<ListViewItem.ListViewSubItem>().Select(s => s.Text);
+            Clipboard.SetText(string.Join(";", parts));
+        }
+
+        private void ApplyTheme(bool dark)
+        {
+            Color back;
+            Color header;
+            Color fore;
+            if (dark)
+            {
+                back = Color.FromArgb(32, 37, 43);
+                header = Color.FromArgb(45, 52, 60);
+                fore = Color.Gainsboro;
+            }
+            else
+            {
+                back = Color.FromArgb(248, 250, 252);
+                header = Color.FromArgb(234, 238, 242);
+                fore = Color.FromArgb(30, 50, 70);
+            }
+            this.BackColor = back;
+            if (_headerPanel != null) _headerPanel.BackColor = header;
+            if (_summaryBox != null)
+            {
+                _summaryBox.BackColor = header;
+                _summaryBox.ForeColor = dark ? Color.LightGray : Color.Black;
+            }
+            if (_titleLabel != null) _titleLabel.ForeColor = fore;
+            if (_processListView != null)
+            {
+                _processListView.BackColor = dark ? Color.FromArgb(40, 44, 52) : Color.White;
+                _processListView.ForeColor = dark ? Color.Gainsboro : Color.Black;
+            }
+            if (_statusStrip != null) _statusStrip.BackColor = header;
+            if (_menuStrip != null) _menuStrip.BackColor = header;
+            if (_toolStrip != null) _toolStrip.BackColor = header;
+            if (_themeDarkItem != null) _themeDarkItem.Checked = dark;
+            if (_themeLightItem != null) _themeLightItem.Checked = !dark;
+        }
+
+        private void SaveSettings()
+        {
+            try
+            {
+                var dark = _themeDarkItem != null && _themeDarkItem.Checked;
+                File.WriteAllText(_settingsFilePath, $"dark={(dark ? 1 : 0)}");
+            }
+            catch { }
+        }
+
+        private void LoadSettings()
+        {
+            try
+            {
+                if (File.Exists(_settingsFilePath))
+                {
+                    var content = File.ReadAllText(_settingsFilePath);
+                    var dark = content.Contains("dark=1");
+                    ApplyTheme(dark);
+                }
+            }
+            catch { }
+        }
+
         private void AdjustHeaderHeight()
         {
             if (_summaryBox == null || _headerPanel == null) return;
-            int availableWidth = _headerPanel.ClientSize.Width - _headerPanel.Padding.Horizontal - 4;
-            if (availableWidth < 200) return;
-            using var g = _summaryBox.CreateGraphics();
-            var size = TextRenderer.MeasureText(_summaryBox.Text, _summaryBox.Font, new Size(availableWidth, int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl);
-            int desired = size.Height + _titleLabel.Height + _headerPanel.Padding.Vertical + 8;
-            int max = 260; // limite para não ocupar demais
-            if (desired > max) desired = max;
-            if (desired < 140) desired = 140;
-            _headerPanel.Height = desired;
+            try
+            {
+                // Garantir medição consistente após layout
+                int availableWidth = _headerPanel.ClientSize.Width - _headerPanel.Padding.Horizontal - 4;
+                if (availableWidth < 200) availableWidth = 200;
+                // Força recalcular WordWrap
+                _summaryBox.Width = availableWidth;
+                // Usa TextRenderer para altura total aproximada
+                var size = TextRenderer.MeasureText(_summaryBox.Text + "\n", _summaryBox.Font, new Size(availableWidth, int.MaxValue), TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl);
+                // Alternativa precisa via posição do último caractere
+                int lastChar = Math.Max(0, _summaryBox.TextLength - 1);
+                var pt = _summaryBox.GetPositionFromCharIndex(lastChar);
+                int textBottom = pt.Y + _summaryBox.Font.Height + 6; // margem
+                int measured = Math.Max(size.Height, textBottom);
+                int desired = measured + _titleLabel.Height + _headerPanel.Padding.Vertical + 4;
+                // Remover limite máximo para evitar corte; garantir mínimo razoável
+                if (desired < 160) desired = 160;
+                _headerPanel.Height = desired;
+            }
+            catch
+            {
+                // fallback simples
+                _headerPanel.Height = 240;
+            }
         }
 
         private void MainForm_KeyDown(object sender, KeyEventArgs e)
@@ -629,6 +918,11 @@ namespace ProcessExplorer
             else if (e.Control && e.KeyCode == Keys.G)
             {
                 ShowPerformanceGraphs();
+                e.Handled = true;
+            }
+            else if (e.Control && e.KeyCode == Keys.C)
+            {
+                CopySelectedRow();
                 e.Handled = true;
             }
         }
