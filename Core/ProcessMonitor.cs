@@ -19,6 +19,7 @@ namespace ProcessExplorer.Core
         private PerformanceCounter? _cpuCounter;
         private PerformanceCounter? _ramCounter;
         private const int CACHE_DURATION_SECONDS = 30;
+        private long _totalPhysicalMemory = 0;
 
         public ProcessMonitor()
         {
@@ -26,6 +27,20 @@ namespace ProcessExplorer.Core
             {
                 _cpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total");
                 _ramCounter = new PerformanceCounter("Memory", "Available MBytes");
+                // Obter memória física total (bytes) uma vez via WMI
+                try
+                {
+                    using var searcher = new ManagementObjectSearcher("SELECT TotalPhysicalMemory FROM Win32_ComputerSystem");
+                    foreach (ManagementObject obj in searcher.Get())
+                    {
+                        _totalPhysicalMemory = Convert.ToInt64(obj["TotalPhysicalMemory"]);
+                        break;
+                    }
+                }
+                catch (Exception ex2)
+                {
+                    Debug.WriteLine($"Falha ao obter memória física total: {ex2.Message}");
+                }
             }
             catch (Exception ex)
             {
@@ -223,6 +238,7 @@ namespace ProcessExplorer.Core
                     var availableMB = _ramCounter.NextValue();
                     stats.TotalMemoryAvailable = (long)(availableMB * 1024 * 1024);
                 }
+                stats.TotalPhysicalMemory = _totalPhysicalMemory;
             }
             catch (Exception ex)
             {
