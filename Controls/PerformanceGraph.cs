@@ -7,9 +7,7 @@ using System.Windows.Forms;
 
 namespace ProcessExplorer.Controls
 {
-    /// <summary>
     /// Controle personalizado para exibir gráficos de performance em tempo real.
-    /// </summary>
     public class PerformanceGraph : Control
     {
         private readonly List<double> _values = new();
@@ -58,9 +56,7 @@ namespace ProcessExplorer.Controls
             }
         }
 
-        /// <summary>
         /// Adiciona um novo valor ao gráfico.
-        /// </summary>
         public void AddValue(double value)
         {
             _currentValue = value;
@@ -74,9 +70,7 @@ namespace ProcessExplorer.Controls
             Invalidate();
         }
 
-        /// <summary>
         /// Limpa todos os valores do gráfico.
-        /// </summary>
         public void Clear()
         {
             _values.Clear();

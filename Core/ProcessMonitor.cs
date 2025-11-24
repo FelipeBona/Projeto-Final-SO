@@ -7,10 +7,8 @@ using ProcessExplorer.Models;
 
 namespace ProcessExplorer.Core
 {
-    /// <summary>
     /// Classe responsável por monitorar processos do sistema.
     /// Demonstra conceitos de SO: gerenciamento de processos, threads, memória.
-    /// </summary>
     public class ProcessMonitor
     {
         private readonly Dictionary<int, DateTime> _lastCpuTime = new();
@@ -48,9 +46,7 @@ namespace ProcessExplorer.Core
             }
         }
 
-        /// <summary>
         /// Obtém a lista de todos os processos em execução.
-        /// </summary>
         public List<ProcessInfo> GetProcesses()
         {
             var processList = new List<ProcessInfo>();

@@ -6,9 +6,7 @@ using ProcessExplorer.Core;
 
 namespace ProcessExplorer.Forms
 {
-    /// <summary>
     /// Formulário para monitoramento gráfico de performance do sistema.
-    /// </summary>
     public class PerformanceMonitorForm : Form
     {
         private ProcessMonitor _monitor;

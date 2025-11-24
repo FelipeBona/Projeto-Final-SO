@@ -1,3 +1,0 @@
-@echo off
-echo Abrindo Process Explorer...
-start "" "bin\Release\net8.0-windows\ProcessExplorer.exe"

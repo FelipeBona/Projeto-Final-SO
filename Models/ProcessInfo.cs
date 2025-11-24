@@ -2,9 +2,7 @@ using System;
 
 namespace ProcessExplorer.Models
 {
-    /// <summary>
     /// Classe que representa informações de um processo do sistema.
-    /// </summary>
     public class ProcessInfo
     {
         public int ProcessId { get; set; }
@@ -19,14 +17,11 @@ namespace ProcessExplorer.Models
         public string FilePath { get; set; } = string.Empty;
         public string Status { get; set; } = "Running";
 
-        /// <summary>
         /// Retorna o uso de memória formatado em MB.
-        /// </summary>
         public string WorkingSetMB => $"{WorkingSet / 1024.0 / 1024.0:F2} MB";
 
-        /// <summary>
         /// Retorna o tempo de execução do processo.
-        /// </summary>
+  
         public string RunningTime
         {
             get

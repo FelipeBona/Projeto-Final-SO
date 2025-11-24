@@ -2,9 +2,7 @@ using System;
 
 namespace ProcessExplorer.Models
 {
-    /// <summary>
     /// Classe que representa estatísticas gerais do sistema.
-    /// </summary>
     public class SystemStats
     {
         public double TotalCpuUsage { get; set; }
